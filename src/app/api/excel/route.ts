@@ -2,7 +2,12 @@ import { MongoClient } from 'mongodb';
 import { format } from 'date-fns';
 
 const uri = process.env.MONGODB_URI;
-const client = new MongoClient(uri!);
+if (!uri) {
+  console.error('MONGODB_URI is not defined in environment variables');
+  throw new Error('MONGODB_URI is not defined in environment variables');
+}
+
+const client = new MongoClient(uri);
 const dbName = 'healthtracker';
 const collectionName = 'habits';
 
@@ -46,17 +51,24 @@ async function ensureTodayExists() {
 
 export async function GET() {
   try {
+    console.log('Attempting to connect to MongoDB...');
     await client.connect();
+    console.log('Successfully connected to MongoDB');
+    
     await ensureTodayExists();
     
     const db = client.db(dbName);
     const collection = db.collection(collectionName);
     
     const data = await collection.find().sort({ date: -1 }).toArray();
+    console.log('Successfully fetched data:', data.length, 'records');
     return Response.json(data);
   } catch (error) {
-    console.error('Error:', error);
-    return Response.json({ error: 'Failed to fetch data' }, { status: 500 });
+    console.error('Error in GET:', error);
+    return Response.json({ 
+      error: 'Failed to fetch data',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, { status: 500 });
   } finally {
     await client.close();
   }
@@ -64,8 +76,12 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const data = await request.json();
+    console.log('Attempting to connect to MongoDB for POST...');
     await client.connect();
+    console.log('Successfully connected to MongoDB for POST');
+    
+    const data = await request.json();
+    console.log('Received data:', data);
     
     const db = client.db(dbName);
     const collection = db.collection(collectionName);
@@ -75,11 +91,15 @@ export async function POST(request: Request) {
       { $set: data },
       { upsert: true }
     );
+    console.log('Successfully updated data for date:', data.date);
     
     return Response.json({ success: true });
   } catch (error) {
-    console.error('Error:', error);
-    return Response.json({ error: 'Failed to save data' }, { status: 500 });
+    console.error('Error in POST:', error);
+    return Response.json({ 
+      error: 'Failed to save data',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, { status: 500 });
   } finally {
     await client.close();
   }
