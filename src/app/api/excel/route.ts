@@ -86,13 +86,23 @@ export async function POST(request: Request) {
     delete updateData._id;
     
     const collection = db.collection(collectionName);
-    const result = await collection.updateOne(
-      { date: updateData.date },
-      { $set: updateData },
-      { upsert: true }
-    );
     
-    console.log('Update result:', result);
+    // First, check if the document exists
+    const existingDoc = await collection.findOne({ date: updateData.date });
+    
+    if (existingDoc) {
+      // If document exists, update it without touching _id
+      const result = await collection.updateOne(
+        { date: updateData.date },
+        { $set: updateData }
+      );
+      console.log('Update result:', result);
+    } else {
+      // If document doesn't exist, insert it
+      const result = await collection.insertOne(updateData);
+      console.log('Insert result:', result);
+    }
+    
     return Response.json({ success: true });
   } catch (error) {
     console.error('Error in POST:', error);
