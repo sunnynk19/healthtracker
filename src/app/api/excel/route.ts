@@ -1,12 +1,12 @@
-import { NextResponse } from 'next/server';
-import * as XLSX from 'xlsx';
-import { promises as fs } from 'fs';
-import path from 'path';
+import { MongoClient } from 'mongodb';
 import { format } from 'date-fns';
 
-const EXCEL_FILE_PATH = path.join(process.cwd(), 'health-tracker.xlsx');
+const uri = process.env.MONGODB_URI;
+const client = new MongoClient(uri!);
+const dbName = 'healthtracker';
+const collectionName = 'habits';
 
-export interface HabitData {
+interface HabitData {
   date: string;
   noSmoking: boolean;
   exercise: boolean;
@@ -20,24 +20,14 @@ export interface HabitData {
   smokingCount: number;
 }
 
-type SheetRow = [
-  string, // date
-  number, // noSmoking
-  number, // exercise
-  number, // water
-  number, // sleep
-  number, // vegFruits
-  number, // alcohol
-  number, // saltOil
-  number, // b12
-  number, // breathing
-  number  // smokingCount
-];
-
-function ensureTodayExists(data: HabitData[]): HabitData[] {
+async function ensureTodayExists() {
   const today = format(new Date(), 'yyyy-MM-dd');
-  if (!data.find(row => row.date === today)) {
-    data.push({
+  const db = client.db(dbName);
+  const collection = db.collection(collectionName);
+  
+  const todayData = await collection.findOne({ date: today });
+  if (!todayData) {
+    const newData: HabitData = {
       date: today,
       noSmoking: false,
       exercise: false,
@@ -48,92 +38,49 @@ function ensureTodayExists(data: HabitData[]): HabitData[] {
       saltOil: false,
       b12: false,
       breathing: false,
-      smokingCount: 0
-    });
-  }
-  return data.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-}
-
-async function ensureExcelFileExists() {
-  try {
-    await fs.access(EXCEL_FILE_PATH);
-  } catch {
-    // File doesn't exist, create it
-    const workbook = XLSX.utils.book_new();
-    const worksheet = XLSX.utils.aoa_to_sheet([
-      ['Date', 'No Smoking', 'Exercise', 'Water', 'Sleep', 'Veg+Fruits', 'Alcohol', 'Salt+Oil', 'B12', 'Breathing', 'Smoking Count']
-    ]);
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Habits');
-    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-    await fs.writeFile(EXCEL_FILE_PATH, buffer);
+      smokingCount: 0,
+    };
+    await collection.insertOne(newData);
   }
 }
 
 export async function GET() {
   try {
-    await ensureExcelFileExists();
-    const fileBuffer = await fs.readFile(EXCEL_FILE_PATH);
-    const workbook = XLSX.read(fileBuffer);
-    const worksheet = workbook.Sheets['Habits'];
-    const data = XLSX.utils.sheet_to_json<SheetRow>(worksheet, { header: 1 });
+    await client.connect();
+    await ensureTodayExists();
     
-    // Skip header row and convert to HabitData format
-    const habitData = data.slice(1).map(row => ({
-      date: row[0],
-      noSmoking: Boolean(row[1]),
-      exercise: Boolean(row[2]),
-      water: Boolean(row[3]),
-      sleep: Boolean(row[4]),
-      vegFruits: Boolean(row[5]),
-      alcohol: Boolean(row[6]),
-      saltOil: Boolean(row[7]),
-      b12: Boolean(row[8]),
-      breathing: Boolean(row[9]),
-      smokingCount: Number(row[10]) || 0
-    }));
-
-    // Ensure today's data exists and sort by date
-    const dataWithToday = ensureTodayExists(habitData);
-
-    return NextResponse.json(dataWithToday);
+    const db = client.db(dbName);
+    const collection = db.collection(collectionName);
+    
+    const data = await collection.find().sort({ date: -1 }).toArray();
+    return Response.json(data);
   } catch (error) {
-    console.error('Error reading Excel file:', error);
-    return NextResponse.json({ error: 'Failed to read Excel file' }, { status: 500 });
+    console.error('Error:', error);
+    return Response.json({ error: 'Failed to fetch data' }, { status: 500 });
+  } finally {
+    await client.close();
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const data: HabitData[] = await request.json();
-    await ensureExcelFileExists();
-
-    // Convert data to array format
-    const rows = [
-      ['Date', 'No Smoking', 'Exercise', 'Water', 'Sleep', 'Veg+Fruits', 'Alcohol', 'Salt+Oil', 'B12', 'Breathing', 'Smoking Count'],
-      ...data.map(row => [
-        row.date,
-        row.noSmoking ? 1 : 0,
-        row.exercise ? 1 : 0,
-        row.water ? 1 : 0,
-        row.sleep ? 1 : 0,
-        row.vegFruits ? 1 : 0,
-        row.alcohol ? 1 : 0,
-        row.saltOil ? 1 : 0,
-        row.b12 ? 1 : 0,
-        row.breathing ? 1 : 0,
-        row.smokingCount
-      ])
-    ];
-
-    const workbook = XLSX.utils.book_new();
-    const worksheet = XLSX.utils.aoa_to_sheet(rows);
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Habits');
-    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-    await fs.writeFile(EXCEL_FILE_PATH, buffer);
-
-    return NextResponse.json({ success: true });
+    const data = await request.json();
+    await client.connect();
+    
+    const db = client.db(dbName);
+    const collection = db.collection(collectionName);
+    
+    await collection.updateOne(
+      { date: data.date },
+      { $set: data },
+      { upsert: true }
+    );
+    
+    return Response.json({ success: true });
   } catch (error) {
-    console.error('Error writing to Excel file:', error);
-    return NextResponse.json({ error: 'Failed to write to Excel file' }, { status: 500 });
+    console.error('Error:', error);
+    return Response.json({ error: 'Failed to save data' }, { status: 500 });
+  } finally {
+    await client.close();
   }
 } 
