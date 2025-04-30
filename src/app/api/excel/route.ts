@@ -83,19 +83,28 @@ export async function POST(request: Request) {
     const data = await request.json();
     console.log('Received data:', data);
     
+    // Create a clean copy without _id
+    const updateData = { ...data };
+    delete updateData._id;
+    
     const db = client.db(dbName);
     const collection = db.collection(collectionName);
     
-    await collection.updateOne(
-      { date: data.date },
-      { $set: data },
+    const result = await collection.updateOne(
+      { date: updateData.date },
+      { $set: updateData },
       { upsert: true }
     );
-    console.log('Successfully updated data for date:', data.date);
+    
+    console.log('Update result:', result);
+    console.log('Successfully updated data for date:', updateData.date);
     
     return Response.json({ success: true });
   } catch (error) {
     console.error('Error in POST:', error);
+    if (error instanceof Error) {
+      console.error('Error stack:', error.stack);
+    }
     return Response.json({ 
       error: 'Failed to save data',
       details: error instanceof Error ? error.message : 'Unknown error'
